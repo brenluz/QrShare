@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 use clap::Parser;
-use qrcode::QrCode;
 use std::fs;
-
+use std::io::Write;
 mod utils;
-use qr_share::*;
+use qr_share::{self};
 
 #[derive(Parser)]
 struct CLi {
@@ -29,16 +28,40 @@ fn main() {
         std::process::exit(1);
     });
 
-    let content = qr_share::start_server(utils::get_local_ip());
-    let listener = qr_share::listen_on_port(content.split(':').last().unwrap().parse::<u16>().unwrap());
+    let (listener, content) = qr_share::setup_listener(utils::get_local_ip());
 
-    let code = QrCode::new(content).unwrap();
+    println!("Scan the QR code to download the file:");
+    utils::display_qr_code(&content);
+    println!("Waiting for phone to scan and connect...");
 
-    let string = code.render()
-    .light_color(' ')
-    .dark_color('#')
-    .build();
-    println!("{}", string);
+    let file_name = args.path.file_name().unwrap().to_string_lossy();
+    let file_size = file_data.len();
 
-    println!("Local IP: {}", utils::get_local_ip());
+    match listener.accept() {
+        Ok((mut stream, addr)) => {
+            
+           let header = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Length: {}\r\n\
+             Content-Disposition: attachment; filename=\"{}\"\r\n\
+             Connection: close\r\n\r\n",
+            file_size, file_name
+        );
+
+            stream.write_all(header.as_bytes()).expect("Failed to send header");
+
+            println!("Sending file data...");
+            std::io::copy(&mut &file_data[..], &mut stream).expect("Failed to send file");
+
+            stream.flush().expect("Failed to flush");
+            println!("File sent successfully!");
+
+        }
+
+        
+        Err(e) => {
+            eprintln!("Failed to accept connection: {}", e);
+        }
+    }
 }
